@@ -27,26 +27,21 @@ function rangeToYF(range) {
   const map = { '1y':'1y', '3y':'5y', '5y':'5y', '10y':'10y' };
   return map[range] || '5y';
 }
-
+// 2. 在 fetchSymbol 函式內，將方法改為 yahooFinance.chart
 async function fetchSymbol(symbol, range) {
-  const key = `${symbol}_${range}`;
-  const now = Date.now();
-
-  if (cache[key] && now - cache[key].ts < CACHE_TTL) {
-    return cache[key].data;
-  }
-
-  const result = await yahooFinance.historical(symbol, {
-    period1: getStartDate(range),
-    interval: '1wk',  // 週線，減少數據量
+  const period1 = getStartDate(range); // 取得開始日期
+  
+  // 改用 chart 方法，這是目前 yahoo-finance2 最穩定的抓取方式
+  const result = await yahooFinance.chart(symbol, {
+    period1: period1,
+    interval: '1d',
   });
 
-  const data = result
-    .filter(r => r.close != null)
-    .map(r => ({ date: r.date.toISOString().slice(0,10), price: +r.close.toFixed(2) }));
-
-  cache[key] = { ts: now, data };
-  return data;
+  // 注意：chart 回傳的結構與 historical 不同，需對應調整
+  return result.quotes.map(quote => ({
+    date: quote.date,
+    price: quote.close
+  })).filter(q => q.price != null);
 }
 
 function getStartDate(range) {
