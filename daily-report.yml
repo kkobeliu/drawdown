@@ -1,0 +1,58 @@
+# .github/workflows/daily-report.yml
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  每日市場回撤 Email 報表 — GitHub Actions
+#
+#  設定方式：
+#  1. 去 GitHub Repo → Settings → Secrets and variables → Actions
+#  2. 新增以下 Secrets：
+#     SENDGRID_KEY  = SG.xxxx（你的 SendGrid API Key）
+#     RECIPIENT     = you@gmail.com（收件人，多人用逗號）
+#     FROM_EMAIL    = sender@yourdomain.com（需在 SendGrid 驗證過）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+name: 每日市場回撤報表
+
+on:
+  schedule:
+    # 早報：UTC 23:30 = 台灣時間 07:30
+    - cron: '30 23 * * 1-5'   # 週一到週五
+    # 晚報：UTC 12:00 = 台灣時間 20:00
+    - cron: '0 12 * * 1-5'
+
+  # 允許手動觸發（測試用）
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: '測試模式（不實際寄信）'
+        required: false
+        default: 'false'
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 檢出代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 安裝依賴
+        run: npm ci
+
+      - name: 執行報表腳本
+        run: node scripts/send-report.js
+        env:
+          SENDGRID_KEY:  ${{ secrets.SENDGRID_KEY }}
+          RECIPIENT:     ${{ secrets.RECIPIENT }}
+          FROM_EMAIL:    ${{ secrets.FROM_EMAIL }}
+          DD_THRESHOLD:  '10'
+          TEST_MODE:     ${{ github.event.inputs.test_mode || 'false' }}
+
+      - name: 記錄完成時間
+        run: echo "✅ 報表寄出完成 $(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M')"
