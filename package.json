@@ -1,6 +1,7 @@
 {
   "name": "market-drawdown",
   "version": "1.0.0",
+  "type": "module",
   "dependencies": {
     "yahoo-finance2": "^2.13.0",
     "@sendgrid/mail": "^8.1.0"
