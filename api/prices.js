@@ -1,4 +1,5 @@
-import yahooFinance from 'yahoo-finance2';
+// 使用解構賦值直接抓取內容，避免 .default 的問題
+import { default as yf } from 'yahoo-finance2';
 
 const SYMBOLS = {
   VOO:  { yahoo: 'VOO',     name: 'VOO',      unit: 'USD' },
@@ -9,7 +10,6 @@ const SYMBOLS = {
   TW:   { yahoo: '0068.TW', name: '006208',    unit: 'TWD' },
 };
 
-// 取得起始日期的輔助函式
 function getStartDate(range) {
   const d = new Date();
   const years = parseInt(range) || 5;
@@ -20,9 +20,15 @@ function getStartDate(range) {
 async function fetchSymbol(symbol, range) {
   const startDate = getStartDate(range);
   
-  // 重要修正：加上 try-catch 並使用 chart 方法
-  // 確保在 Vercel 環境中能抓到數據
-  const result = await yahooFinance.chart(symbol, {
+  // 關鍵修正：確保使用的是 yf.chart
+  // 如果 yf.chart 還是不行，這行會嘗試自動修正對象層級
+  const chartFunc = yf.chart || (yf.default && yf.default.chart);
+  
+  if (!chartFunc) {
+    throw new Error('Yahoo Finance chart function not found');
+  }
+
+  const result = await chartFunc.call(yf, symbol, {
     period1: startDate,
     interval: '1d',
   });
@@ -31,7 +37,7 @@ async function fetchSymbol(symbol, range) {
 
   return result.quotes
     .map(quote => ({
-      date: quote.date.toISOString().slice(0, 10),
+      date: quote.date instanceof Date ? quote.date.toISOString().slice(0, 10) : new Date(quote.date).toISOString().slice(0, 10),
       price: quote.close
     }))
     .filter(q => q.price != null);
@@ -53,7 +59,7 @@ export default async function handler(req, res) {
       const result = results[i];
       if (result.status === 'rejected') {
         console.error(`Failed to fetch ${key}:`, result.reason);
-        return { name: meta.name, unit: meta.unit, data: [], error: true };
+        return { name: meta.name, unit: meta.unit, data: [], labels: [], current: 0, error: true };
       }
 
       const series = result.value;
