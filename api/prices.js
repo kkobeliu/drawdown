@@ -1,7 +1,10 @@
-import * as yfModule from 'yahoo-finance2';
+// api/prices.js — 修正版
+// 問題：yahoo-finance2 在 Vercel ESM 環境下 .chart() 無法使用
+// 解法：改用 .historical()，並用 createRequire 強制 CommonJS 載入
 
-// 解決匯出問題：自動尋找有效的 yahooFinance 對象
-const yahooFinance = yfModule.default || yfModule;
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const yahooFinance = require('yahoo-finance2').default;
 
 const SYMBOLS = {
   VOO:  { yahoo: 'VOO',     name: 'VOO',      unit: 'USD' },
@@ -12,63 +15,69 @@ const SYMBOLS = {
   TW:   { yahoo: '0068.TW', name: '006208',    unit: 'TWD' },
 };
 
-async function fetchSymbol(symbol, range) {
-  const d = new Date();
-  const years = parseInt(range) || 5;
-  d.setFullYear(d.getFullYear() - years);
+const cache = new Map();
+const CACHE_MS = 30 * 60 * 1000;
 
-  // 嘗試找出 chart 函數（相容多種導入路徑）
-  const chart = yahooFinance.chart || (yahooFinance.default && yahooFinance.default.chart);
-  
-  if (!chart) {
-    throw new Error(`Yahoo Finance API structure error: ${Object.keys(yahooFinance)}`);
-  }
+async function fetchSymbol(symbol, years) {
+  const cacheKey = `${symbol}_${years}`;
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_MS) return cached.data;
 
-  // 使用 .call 確保 this 綁定正確
-  const result = await chart.call(yahooFinance, symbol, {
-    period1: d,
-    interval: '1d',
+  const period1 = new Date();
+  period1.setFullYear(period1.getFullYear() - years);
+
+  const rows = await yahooFinance.historical(symbol, {
+    period1,
+    interval: '1wk',
   });
 
-  if (!result || !result.quotes) return [];
+  const data = rows
+    .filter(r => r.close != null)
+    .map(r => ({
+      date:  r.date.toISOString().slice(0, 10),
+      price: +r.close.toFixed(2),
+    }));
 
-  return result.quotes
-    .map(quote => ({
-      date: new Date(quote.date).toISOString().slice(0, 10),
-      price: quote.close
-    }))
-    .filter(q => q.price != null);
+  cache.set(cacheKey, { ts: Date.now(), data });
+  return data;
 }
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const range = req.query.range || '5y';
+  const rangeStr = req.query.range || '5y';
+  const years = parseInt(rangeStr) || 5;
 
   try {
     const entries = Object.entries(SYMBOLS);
     const results = await Promise.allSettled(
-      entries.map(([key, meta]) => fetchSymbol(meta.yahoo, range))
+      entries.map(([, meta]) => fetchSymbol(meta.yahoo, years))
     );
 
-    const tickers = entries.map(([key, meta], i) => {
-      const result = results[i];
-      if (result.status === 'rejected') {
-        console.error(`Failed to fetch ${key}:`, result.reason);
+    const tickers = entries.map(([, meta], i) => {
+      const r = results[i];
+      if (r.status === 'rejected') {
+        console.error(`[prices] X ${meta.name}:`, r.reason?.message || r.reason);
         return { name: meta.name, unit: meta.unit, data: [], labels: [], current: 0, error: true };
       }
+      const series = r.value;
       return {
-        name: meta.name,
-        unit: meta.unit,
-        data: result.value.map(r => r.price),
-        labels: result.value.map(r => r.date),
-        current: result.value.length > 0 ? result.value[result.value.length - 1].price : 0
+        name:    meta.name,
+        unit:    meta.unit,
+        data:    series.map(p => p.price),
+        labels:  series.map(p => p.date),
+        current: series.length ? series[series.length - 1].price : 0,
+        error:   false,
       };
     });
 
-    res.status(200).json(tickers);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(200).json({ tickers, updatedAt: new Date().toISOString(), range: rangeStr });
+
+  } catch (err) {
+    console.error('[prices] Fatal:', err);
+    res.status(500).json({ error: err.message });
   }
 }
