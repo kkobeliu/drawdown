@@ -1,10 +1,7 @@
-// api/prices.js — 修正版
-// 問題：yahoo-finance2 在 Vercel ESM 環境下 .chart() 無法使用
-// 解法：改用 .historical()，並用 createRequire 強制 CommonJS 載入
+// api/prices.js — v3 修正版
+// 修正：改用 yahoo-finance2/dist/esm 明確路徑，繞過 package exports 問題
 
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const yahooFinance = require('yahoo-finance2').default;
+import yahooFinance from 'yahoo-finance2/dist/esm/src/yahoo-finance.js';
 
 const SYMBOLS = {
   VOO:  { yahoo: 'VOO',     name: 'VOO',      unit: 'USD' },
@@ -60,7 +57,7 @@ export default async function handler(req, res) {
     const tickers = entries.map(([, meta], i) => {
       const r = results[i];
       if (r.status === 'rejected') {
-        console.error(`[prices] X ${meta.name}:`, r.reason?.message || r.reason);
+        console.error(`[prices] X ${meta.name}:`, r.reason?.message);
         return { name: meta.name, unit: meta.unit, data: [], labels: [], current: 0, error: true };
       }
       const series = r.value;
