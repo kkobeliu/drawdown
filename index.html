@@ -193,8 +193,7 @@ footer a{color:var(--blue);text-decoration:none}
   <div class="info-grid" id="infoGrid"></div>
 
   <footer>
-    <p>⚠ 目前為 <strong>模擬數據</strong>，部署後請將 <code>USE_REAL_DATA = false</code> 改為 <code>true</code></p>
-    <p>後端 API 見 <code>pages/api/prices.js</code>（Next.js）或 <code>server.js</code>（Express）</p>
+    <p>數據來源：Yahoo Finance · 每 30 分鐘更新</p>
     <p>Market Drawdown Monitor · 2025 · <a href="https://github.com" target="_blank">GitHub</a></p>
   </footer>
 </div>
@@ -231,12 +230,12 @@ const ALL_LABELS = Array.from({length:N}, (_,i)=>{
 });
 
 const TICKERS = [
-  {name:'VOO',       ticker:'VOO',  color:'#4a9eff', unit:'USD', raw:genSeries(190,  0.120, 0.022, 42)},
-  {name:'那斯達克',  ticker:'QQQ',  color:'#a78bfa', unit:'pt',  raw:genSeries(4500, 0.155, 0.030, 137)},
-  {name:'費半 SOX',  ticker:'SOXX', color:'#22d3ee', unit:'pt',  raw:genSeries(800,  0.140, 0.042, 77)},
-  {name:'WTI 油價',  ticker:'WTI',  color:'#f5a623', unit:'USD', raw:genSeries(65,  -0.015, 0.040, 211)},
-  {name:'黃金',      ticker:'GC',   color:'#f5d442', unit:'USD', raw:genSeries(1200, 0.055, 0.017, 333)},
-  {name:'006208',    ticker:'TW',   color:'#22d3a0', unit:'TWD', raw:genSeries(42,   0.105, 0.022, 99)},
+  {name:'VOO',       ticker:'VOO',  color:'#4a9eff', unit:'USD', raw:genSeries(190,  0.120, 0.022, 42),  apiLabels:null},
+  {name:'那斯達克',  ticker:'QQQ',  color:'#a78bfa', unit:'pt',  raw:genSeries(4500, 0.155, 0.030, 137), apiLabels:null},
+  {name:'費半 SOX',  ticker:'SOXX', color:'#22d3ee', unit:'pt',  raw:genSeries(800,  0.140, 0.042, 77),  apiLabels:null},
+  {name:'WTI 油價',  ticker:'WTI',  color:'#f5a623', unit:'USD', raw:genSeries(65,  -0.015, 0.040, 211), apiLabels:null},
+  {name:'黃金',      ticker:'GC',   color:'#f5d442', unit:'USD', raw:genSeries(1200, 0.055, 0.017, 333), apiLabels:null},
+  {name:'006208',    ticker:'TW',   color:'#22d3a0', unit:'TWD', raw:genSeries(42,   0.105, 0.022, 99),  apiLabels:null},
 ];
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -279,11 +278,13 @@ function fmt(v, unit) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderChart() {
   const s = si();
-  const labels = ALL_LABELS.slice(s);
+  // 有即時數據時用 API 回傳的日期，否則用模擬日期
+  const firstWithLabels = TICKERS.find(t => t.apiLabels && t.apiLabels.length > 0);
+  const labels = firstWithLabels ? firstWithLabels.apiLabels : ALL_LABELS.slice(s);
   document.getElementById('dateRange').textContent = labels[0]+' → '+labels[labels.length-1];
 
   const datasets = TICKERS.map((t,i)=>({
-    label:t.name, data: normalize(slice(t.raw)),
+    label:t.name, data: normalize(t.apiLabels ? t.raw : slice(t.raw)),
     borderColor:t.color, backgroundColor:'transparent',
     borderWidth:1.8, pointRadius:0, tension:0.3, hidden:!visible[i],
   }));
@@ -415,7 +416,7 @@ async function fetchRealData() {
     if(!res.ok) throw new Error(res.statusText);
     const json = await res.json();
     // 後端格式: { tickers: [{name, data:[...prices]}], updatedAt: ISO string }
-    json.tickers.forEach((item,i)=>{ if(TICKERS[i]) TICKERS[i].raw = item.data; });
+    json.tickers.forEach((item,i)=>{ if(TICKERS[i]) { TICKERS[i].raw = item.data; TICKERS[i].apiLabels = item.labels || null; } });
     const badge = document.getElementById('dataBadge');
     badge.textContent='🟢 即時數據';
     badge.style.cssText='padding:4px 12px;background:rgba(34,211,160,.1);border:1px solid rgba(34,211,160,.3);border-radius:20px;font-size:11px;color:#22d3a0;letter-spacing:.3px';
@@ -444,9 +445,11 @@ window.toggleAll = btn => {
   btn.classList.toggle('active',!allOn);
   render();
 };
-window.setRange = (btn,yrs) => {
+window.setRange = async (btn,yrs) => {
   document.querySelectorAll('.rng-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active'); rangeYears=yrs; render();
+  btn.classList.add('active'); rangeYears=yrs;
+  if(USE_REAL_DATA) await fetchRealData();
+  render();
 };
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

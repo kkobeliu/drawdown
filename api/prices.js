@@ -1,18 +1,15 @@
-// api/prices.js — 最終版
-// 直接呼叫 Yahoo Finance v8 API，不依賴任何第三方套件
-// Node 18+ 內建 fetch，Vercel 支援，零套件依賴
-
+// api/prices.js — 修正006208代號版
 const SYMBOLS = {
   VOO:  { yahoo: 'VOO',     name: 'VOO',      unit: 'USD' },
   QQQ:  { yahoo: 'QQQ',     name: '那斯達克',  unit: 'pt'  },
   SOXX: { yahoo: 'SOXX',    name: '費半 SOX',  unit: 'pt'  },
   WTI:  { yahoo: 'CL=F',    name: 'WTI 油價',  unit: 'USD' },
   GC:   { yahoo: 'GC=F',    name: '黃金',      unit: 'USD' },
-  TW:   { yahoo: '0068.TW', name: '006208',    unit: 'TWD' },
+  TW:   { yahoo: '006208.TW', name: '006208',  unit: 'TWD' },
 };
 
 const cache = new Map();
-const CACHE_MS = 30 * 60 * 1000; // 30 分鐘
+const CACHE_MS = 30 * 60 * 1000;
 
 async function fetchSymbol(symbol, years) {
   const cacheKey = `${symbol}_${years}`;
@@ -24,13 +21,10 @@ async function fetchSymbol(symbol, years) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${period1}&period2=${period2}&interval=1wk&includePrePost=false`;
 
   const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; MarketMonitor/1.0)',
-    }
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MarketMonitor/1.0)' }
   });
 
   if (!res.ok) throw new Error(`Yahoo API ${res.status} for ${symbol}`);
-
   const json = await res.json();
   const chart = json?.chart?.result?.[0];
   if (!chart) throw new Error(`No data for ${symbol}`);
@@ -82,7 +76,6 @@ export default async function handler(req, res) {
     });
 
     res.status(200).json({ tickers, updatedAt: new Date().toISOString(), range: rangeStr });
-
   } catch (err) {
     console.error('[prices] Fatal:', err);
     res.status(500).json({ error: err.message });
