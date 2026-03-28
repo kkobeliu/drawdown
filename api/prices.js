@@ -85,7 +85,7 @@ export default async function handler(req, res) {
       };
     });
 
-    res.status(200).json({ tickers, updatedAt: new Date().toISOString(), range: rangeStr });
+    res.status(200).json({ tickers, updatedAt: new Date().toISOString(), range: cacheKeySuffix });
   } catch (err) {
     console.error('[prices] Fatal:', err);
     res.status(500).json({ error: err.message });
