@@ -340,7 +340,7 @@ function renderStats() {
   const el = document.getElementById('statCards'); el.innerHTML='';
   TICKERS.forEach((t,i)=>{
     if(!visible[i]) return;
-    const {ath,cur,dd,gain} = calcStats(slice(t.raw));
+    const {ath,cur,dd,gain} = calcStats(t.apiLabels ? t.raw : slice(t.raw));
     const ddClass = Math.abs(dd)>20?'bad':Math.abs(dd)>10?'warn':'ok';
     const card = document.createElement('div');
     card.className='stat-card';
@@ -360,7 +360,7 @@ function renderStats() {
 function renderTable() {
   const tbody = document.getElementById('ddBody'); tbody.innerHTML='';
   const rows = TICKERS
-    .map((t,i)=>({...calcStats(slice(t.raw)),t,i}))
+    .map((t,i)=>({...calcStats(t.apiLabels ? t.raw : slice(t.raw)),t,i}))
     .filter((_,i)=>visible[i])
     .sort((a,b)=>a.dd-b.dd);
   rows.forEach(({t,ath,cur,dd,gain})=>{
@@ -389,7 +389,7 @@ function renderTable() {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderInfo() {
   const el=document.getElementById('infoGrid'); el.innerHTML='';
-  const vis=TICKERS.map((t,i)=>({...calcStats(slice(t.raw)),t,i})).filter((_,i)=>visible[i]);
+  const vis=TICKERS.map((t,i)=>({...calcStats(t.apiLabels ? t.raw : slice(t.raw)),t,i})).filter((_,i)=>visible[i]);
   if(!vis.length) return;
 
   const c1=document.createElement('div'); c1.className='info-card';
