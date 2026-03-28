@@ -3,7 +3,7 @@ const SYMBOLS = {
   VOO:  { yahoo: 'VOO',     name: 'VOO',      unit: 'USD' },
   QQQ:  { yahoo: 'QQQ',     name: '那斯達克',  unit: 'pt'  },
   SOXX: { yahoo: 'SOXX',    name: '費半 SOX',  unit: 'pt'  },
-  WTI:  { yahoo: 'CL=F',    name: 'WTI 油價',  unit: 'USD' },
+  WTI:  { yahoo: 'USO',     name: 'WTI 油價',  unit: 'USD' },  // USO ETF 追蹤原油，避免期貨換月跳價問題
   GC:   { yahoo: 'GC=F',    name: '黃金',      unit: 'USD' },
   TW:   { yahoo: '006208.TW', name: '006208',  unit: 'TWD' },
 };
