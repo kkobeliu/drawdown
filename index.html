@@ -113,6 +113,23 @@ footer a{color:var(--blue);text-decoration:none}
   .stats-grid{grid-template-columns:1fr 1fr}
   .divider{display:none}
 }
+.custom-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+.custom-range label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.date-input{background:var(--surface3);border:1px solid var(--border);border-radius:8px;
+  color:var(--text);font-family:'Space Grotesk',sans-serif;font-size:11px;padding:5px 10px;
+  outline:none;cursor:pointer;transition:border-color .2s;color-scheme:dark}
+.date-input:focus,.date-input:hover{border-color:var(--blue)}
+.apply-btn{padding:5px 14px;border-radius:16px;border:1.5px solid var(--amber);background:transparent;
+  color:var(--amber);font-family:'Space Grotesk',sans-serif;font-size:11px;cursor:pointer;
+  transition:all .2s;letter-spacing:.3px}
+.apply-btn:hover{background:rgba(245,166,35,.12)}
+.loading-overlay{display:none;position:absolute;inset:0;background:rgba(10,14,26,.7);
+  border-radius:14px;align-items:center;justify-content:center;font-size:13px;color:var(--muted);
+  z-index:10;letter-spacing:.5px}
+.loading-overlay.show{display:flex}
+.spin{display:inline-block;width:16px;height:16px;border:2px solid var(--border);
+  border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -152,11 +169,20 @@ footer a{color:var(--blue);text-decoration:none}
         <button class="rng-btn" onclick="setRange(this,3)">3Y</button>
         <button class="rng-btn active" onclick="setRange(this,5)">5Y</button>
         <button class="rng-btn" onclick="setRange(this,10)">10Y</button>
+        <button class="rng-btn" onclick="setRange(this,20)">20Y</button>
+      </div>
+      <div class="custom-range">
+        <label>自訂</label>
+        <input type="date" class="date-input" id="dateFrom" title="開始日期">
+        <span style="color:var(--dim);font-size:11px">→</span>
+        <input type="date" class="date-input" id="dateTo" title="結束日期">
+        <button class="apply-btn" onclick="applyCustomRange()">套用</button>
       </div>
     </div>
   </div>
 
-  <div class="chart-card">
+  <div class="chart-card" style="position:relative">
+    <div class="loading-overlay" id="loadingOverlay"><span class="spin"></span>載入中...</div>
     <div class="chart-header">
       <span class="chart-title">標準化走勢（基期 = 100，可點選 Legend 切換）</span>
       <span class="chart-sub" id="dateRange"></span>
@@ -410,18 +436,32 @@ function renderInfo() {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  REAL DATA (部署後啟用)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// customFrom / customTo: 'YYYY-MM-DD' string or null
+let customFrom = null, customTo = null;
+
+function showLoading(v) {
+  document.getElementById('loadingOverlay').classList.toggle('show', v);
+}
+
 async function fetchRealData() {
+  showLoading(true);
   try {
-    const res = await fetch(`${API_BASE}/prices?range=${rangeYears}y`);
+    let url;
+    if (customFrom && customTo) {
+      url = `${API_BASE}/prices?from=${customFrom}&to=${customTo}`;
+    } else {
+      url = `${API_BASE}/prices?range=${rangeYears}y`;
+    }
+    const res = await fetch(url);
     if(!res.ok) throw new Error(res.statusText);
     const json = await res.json();
-    // 後端格式: { tickers: [{name, data:[...prices]}], updatedAt: ISO string }
     json.tickers.forEach((item,i)=>{ if(TICKERS[i]) { TICKERS[i].raw = item.data; TICKERS[i].apiLabels = item.labels || null; } });
     const badge = document.getElementById('dataBadge');
     badge.textContent='🟢 即時數據';
     badge.style.cssText='padding:4px 12px;background:rgba(34,211,160,.1);border:1px solid rgba(34,211,160,.3);border-radius:20px;font-size:11px;color:#22d3a0;letter-spacing:.3px';
     if(json.updatedAt) document.getElementById('lastUpdate').textContent='更新：'+new Date(json.updatedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
   } catch(e) { console.warn('即時數據失敗，fallback 模擬數據',e); }
+  showLoading(false);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -446,8 +486,21 @@ window.toggleAll = btn => {
   render();
 };
 window.setRange = async (btn,yrs) => {
+  customFrom = null; customTo = null;
   document.querySelectorAll('.rng-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active'); rangeYears=yrs;
+  if(USE_REAL_DATA) await fetchRealData();
+  render();
+};
+
+window.applyCustomRange = async () => {
+  const from = document.getElementById('dateFrom').value;
+  const to   = document.getElementById('dateTo').value;
+  if (!from || !to) { alert('請選擇開始和結束日期'); return; }
+  if (from >= to)   { alert('開始日期必須早於結束日期'); return; }
+  // deactivate preset buttons
+  document.querySelectorAll('.rng-btn').forEach(b=>b.classList.remove('active'));
+  customFrom = from; customTo = to;
   if(USE_REAL_DATA) await fetchRealData();
   render();
 };
@@ -460,6 +513,11 @@ function render() { renderChart(); renderStats(); renderTable(); renderInfo(); }
 async function init() {
   document.getElementById('lastUpdate').textContent =
     '更新：'+new Date().toLocaleString('zh-TW',{timeZone:'Asia/Taipei',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  // Set default date input values
+  const today = new Date().toISOString().slice(0,10);
+  const fiveYearsAgo = new Date(Date.now() - 5*365*24*3600*1000).toISOString().slice(0,10);
+  document.getElementById('dateFrom').value = fiveYearsAgo;
+  document.getElementById('dateTo').value = today;
   if(USE_REAL_DATA) await fetchRealData();
   render();
 }

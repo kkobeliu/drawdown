@@ -11,14 +11,11 @@ const SYMBOLS = {
 const cache = new Map();
 const CACHE_MS = 30 * 60 * 1000;
 
-async function fetchSymbol(symbol, years) {
-  const cacheKey = `${symbol}_${years}`;
+async function fetchSymbol(symbol, period1Unix, period2Unix, cacheKey) {
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_MS) return cached.data;
 
-  const period1 = Math.floor(Date.now() / 1000) - years * 365 * 24 * 3600;
-  const period2 = Math.floor(Date.now() / 1000);
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${period1}&period2=${period2}&interval=1wk&includePrePost=false`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${period1Unix}&period2=${period2Unix}&interval=1wk&includePrePost=false`;
 
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MarketMonitor/1.0)' }
@@ -49,13 +46,26 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const rangeStr = req.query.range || '5y';
-  const years = parseInt(rangeStr) || 5;
+  // 支援兩種模式：
+  //   ?range=5y          — 往回 N 年
+  //   ?from=2020-01-01&to=2024-12-31 — 自訂日期區間
+  let period1Unix, period2Unix, cacheKeySuffix;
+  if (req.query.from && req.query.to) {
+    period1Unix = Math.floor(new Date(req.query.from).getTime() / 1000);
+    period2Unix = Math.floor(new Date(req.query.to).getTime() / 1000);
+    cacheKeySuffix = `${req.query.from}_${req.query.to}`;
+  } else {
+    const rangeStr = req.query.range || '5y';
+    const years = parseInt(rangeStr) || 5;
+    period2Unix = Math.floor(Date.now() / 1000);
+    period1Unix = period2Unix - years * 365 * 24 * 3600;
+    cacheKeySuffix = rangeStr;
+  }
 
   try {
     const entries = Object.entries(SYMBOLS);
     const results = await Promise.allSettled(
-      entries.map(([, meta]) => fetchSymbol(meta.yahoo, years))
+      entries.map(([, meta]) => fetchSymbol(meta.yahoo, period1Unix, period2Unix, `${meta.yahoo}_${cacheKeySuffix}`))
     );
 
     const tickers = entries.map(([, meta], i) => {
