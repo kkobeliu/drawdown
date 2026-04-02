@@ -113,6 +113,41 @@ footer a{color:var(--blue);text-decoration:none}
   .stats-grid{grid-template-columns:1fr 1fr}
   .divider{display:none}
 }
+/* ── Add ticker modal ── */
+.add-btn{padding:7px 13px;border-radius:20px;border:1.5px dashed var(--border);background:transparent;
+  color:var(--dim);font-family:'Space Grotesk',sans-serif;font-size:12px;cursor:pointer;
+  transition:all .2s;letter-spacing:.3px;display:inline-flex;align-items:center;gap:5px}
+.add-btn:hover{border-color:var(--green);color:var(--green)}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;
+  align-items:center;justify-content:center}
+.modal-bg.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:24px;width:340px;max-width:90vw}
+.modal h3{font-size:15px;font-weight:500;margin-bottom:4px}
+.modal p{font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.6}
+.modal-row{display:flex;gap:8px;margin-bottom:12px}
+.modal-input{flex:1;background:var(--surface3);border:1px solid var(--border);border-radius:8px;
+  color:var(--text);font-family:'Space Grotesk',sans-serif;font-size:13px;padding:9px 12px;
+  outline:none;transition:border-color .2s;text-transform:uppercase}
+.modal-input:focus{border-color:var(--blue)}
+.modal-input.name-input{text-transform:none}
+.modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+.modal-cancel{padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:transparent;
+  color:var(--muted);font-family:'Space Grotesk',sans-serif;font-size:12px;cursor:pointer;transition:all .2s}
+.modal-cancel:hover{border-color:var(--text);color:var(--text)}
+.modal-confirm{padding:8px 16px;border-radius:8px;border:none;background:var(--blue);
+  color:#fff;font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:500;cursor:pointer;transition:opacity .2s}
+.modal-confirm:hover{opacity:.85}
+.modal-confirm:disabled{opacity:.4;cursor:not-allowed}
+.modal-error{font-size:11px;color:var(--red);margin-top:4px;min-height:16px}
+.modal-loading{font-size:11px;color:var(--muted);margin-top:4px}
+.tick-btn .remove-x{margin-left:4px;opacity:.5;font-size:10px;line-height:1;
+  display:inline-block;transition:opacity .2s}
+.tick-btn:hover .remove-x{opacity:1;color:var(--red)}
+/* colour swatches */
+.swatch-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px}
+.swatch{width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:border-color .15s}
+.swatch.selected{border-color:#fff}
 .custom-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
 .custom-range label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
 .date-input{background:var(--surface3);border:1px solid var(--border);border-radius:8px;
@@ -160,6 +195,7 @@ footer a{color:var(--blue);text-decoration:none}
         <button class="tick-btn active" data-idx="4" onclick="toggleIdx(this)">黃金</button>
         <button class="tick-btn active" data-idx="5" onclick="toggleIdx(this)">006208</button>
       </div>
+      <button class="add-btn" onclick="openModal()" style="margin-top:6px">＋ 新增標的</button>
     </div>
     <div class="divider"></div>
     <div>
@@ -222,6 +258,29 @@ footer a{color:var(--blue);text-decoration:none}
     <p>數據來源：Yahoo Finance · 每 30 分鐘更新</p>
     <p>Market Drawdown Monitor · 2025 · <a href="https://github.com" target="_blank">GitHub</a></p>
   </footer>
+</div>
+
+<!-- Add Ticker Modal -->
+<div class="modal-bg" id="modalBg" onclick="handleModalBgClick(event)">
+  <div class="modal">
+    <h3>新增監控標的</h3>
+    <p>輸入 Yahoo Finance 代號，例如：<br>
+      股票 <code>AAPL</code>・ETF <code>SPY</code>・台股 <code>2330.TW</code>・期貨 <code>GC=F</code></p>
+    <div class="modal-row">
+      <input class="modal-input" id="modalSymbol" placeholder="代號 e.g. AAPL" maxlength="20"
+        oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')verifySymbol()">
+    </div>
+    <div class="modal-row">
+      <input class="modal-input name-input" id="modalName" placeholder="顯示名稱 e.g. 蘋果" maxlength="10">
+    </div>
+    <div class="swatch-row" id="swatchRow"></div>
+    <div class="modal-error" id="modalError"></div>
+    <div class="modal-loading" id="modalLoading"></div>
+    <div class="modal-btns">
+      <button class="modal-cancel" onclick="closeModal()">取消</button>
+      <button class="modal-confirm" id="modalConfirm" onclick="verifySymbol()">驗證並新增</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -504,6 +563,120 @@ window.applyCustomRange = async () => {
   if(USE_REAL_DATA) await fetchRealData();
   render();
 };
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  ADD / REMOVE TICKER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const PALETTE = [
+  '#4a9eff','#a78bfa','#22d3ee','#f5a623','#f5d442','#22d3a0',
+  '#f87171','#34d399','#fb923c','#e879f9','#60a5fa','#facc15',
+];
+let selectedColor = PALETTE[6]; // default for new tickers
+
+function openModal() {
+  document.getElementById('modalSymbol').value = '';
+  document.getElementById('modalName').value = '';
+  document.getElementById('modalError').textContent = '';
+  document.getElementById('modalLoading').textContent = '';
+  document.getElementById('modalConfirm').disabled = false;
+  // pick a color not already used
+  const used = TICKERS.map(t=>t.color);
+  selectedColor = PALETTE.find(c=>!used.includes(c)) || PALETTE[Math.floor(Math.random()*PALETTE.length)];
+  // build swatches
+  const row = document.getElementById('swatchRow');
+  row.innerHTML = PALETTE.map(c=>`
+    <div class="swatch${c===selectedColor?' selected':''}" style="background:${c}"
+      onclick="selectColor('${c}',this)"></div>`).join('');
+  document.getElementById('modalBg').classList.add('open');
+  setTimeout(()=>document.getElementById('modalSymbol').focus(), 50);
+}
+function closeModal() {
+  document.getElementById('modalBg').classList.remove('open');
+}
+function handleModalBgClick(e) {
+  if(e.target === document.getElementById('modalBg')) closeModal();
+}
+function selectColor(c, el) {
+  selectedColor = c;
+  document.querySelectorAll('.swatch').forEach(s=>s.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+async function verifySymbol() {
+  const symbol = document.getElementById('modalSymbol').value.trim();
+  const name   = document.getElementById('modalName').value.trim() || symbol;
+  if (!symbol) { document.getElementById('modalError').textContent = '請輸入代號'; return; }
+
+  // check duplicate
+  if (TICKERS.find(t=>t.ticker.toUpperCase()===symbol.toUpperCase())) {
+    document.getElementById('modalError').textContent = '此標的已在列表中';
+    return;
+  }
+
+  document.getElementById('modalConfirm').disabled = true;
+  document.getElementById('modalError').textContent = '';
+  document.getElementById('modalLoading').textContent = '⏳ 驗證中，請稍候...';
+
+  try {
+    // verify by calling backend
+    let url;
+    if (customFrom && customTo) {
+      url = `${API_BASE}/prices?symbols=${encodeURIComponent(symbol)}&from=${customFrom}&to=${customTo}`;
+    } else {
+      url = `${API_BASE}/prices?symbols=${encodeURIComponent(symbol)}&range=${rangeYears}y`;
+    }
+    const res = await fetch(url);
+    const json = await res.json();
+    const ticker = json.tickers?.[0];
+
+    if (!ticker || ticker.error || !ticker.data?.length) {
+      throw new Error('找不到此標的，請確認代號是否正確');
+    }
+
+    // add to TICKERS
+    TICKERS.push({
+      name, ticker: symbol, color: selectedColor,
+      unit: ticker.unit || '',
+      raw: ticker.data,
+      apiLabels: ticker.labels || null,
+    });
+    visible.push(true);
+
+    // rebuild ticker buttons
+    rebuildTickerBtns();
+    closeModal();
+    render();
+  } catch(e) {
+    document.getElementById('modalError').textContent = e.message || '驗證失敗';
+    document.getElementById('modalConfirm').disabled = false;
+  }
+  document.getElementById('modalLoading').textContent = '';
+}
+
+function removeTicker(idx) {
+  TICKERS.splice(idx, 1);
+  visible.splice(idx, 1);
+  rebuildTickerBtns();
+  render();
+}
+
+function rebuildTickerBtns() {
+  const container = document.getElementById('tickerBtns');
+  // keep the "全部" button, rebuild the rest
+  const allBtn = container.querySelector('.tick-btn.all');
+  container.innerHTML = '';
+  container.appendChild(allBtn);
+  TICKERS.forEach((t, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'tick-btn' + (visible[i] ? ' active' : '');
+    btn.dataset.idx = i;
+    btn.innerHTML = `${t.name}<span class="remove-x" onclick="event.stopPropagation();removeTicker(${i})">✕</span>`;
+    btn.onclick = function() { toggleIdx(this); };
+    container.appendChild(btn);
+  });
+  // update "全部" state
+  allBtn.classList.toggle('active', visible.every(v=>v));
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  INIT
