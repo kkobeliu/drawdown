@@ -3,7 +3,7 @@ const SYMBOLS = {
   VOO:  { yahoo: 'VOO',     name: 'VOO',      unit: 'USD' },
   QQQ:  { yahoo: 'QQQ',     name: '那斯達克',  unit: 'pt'  },
   SOXX: { yahoo: 'SOXX',    name: '費半 SOX',  unit: 'pt'  },
-  WTI:  { yahoo: 'USO',     name: 'WTI 油價',  unit: 'USD' },  // USO ETF 追蹤原油，避免期貨換月跳價問題
+  WTI:  { yahoo: 'CL=F',    name: 'WTI 油價',  unit: 'USD' },
   GC:   { yahoo: 'GC=F',    name: '黃金',      unit: 'USD' },
   TW:   { yahoo: '006208.TW', name: '006208',  unit: 'TWD' },
 };
@@ -29,12 +29,21 @@ async function fetchSymbol(symbol, period1Unix, period2Unix, cacheKey) {
   const timestamps = chart.timestamp || [];
   const closes = chart.indicators?.quote?.[0]?.close || [];
 
-  const data = timestamps
+  let data = timestamps
     .map((ts, i) => ({
       date:  new Date(ts * 1000).toISOString().slice(0, 10),
       price: closes[i] != null ? +closes[i].toFixed(2) : null,
     }))
     .filter(p => p.price != null);
+
+  // 過濾換月跳價異常值：若某點與前一點價差超過 25%，用前一點替換
+  for (let i = 1; i < data.length; i++) {
+    const prev = data[i - 1].price;
+    const curr = data[i].price;
+    if (Math.abs(curr - prev) / prev > 0.25) {
+      data[i] = { ...data[i], price: prev };
+    }
+  }
 
   cache.set(cacheKey, { ts: Date.now(), data });
   return data;
@@ -46,9 +55,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  // 支援兩種模式：
-  //   ?range=5y          — 往回 N 年
-  //   ?from=2020-01-01&to=2024-12-31 — 自訂日期區間
+  // 日期區間解析
   let period1Unix, period2Unix, cacheKeySuffix;
   if (req.query.from && req.query.to) {
     period1Unix = Math.floor(new Date(req.query.from).getTime() / 1000);
@@ -62,8 +69,17 @@ export default async function handler(req, res) {
     cacheKeySuffix = rangeStr;
   }
 
+  // 支援自訂 symbols 參數（用於新增標的驗證）
+  // ?symbols=AAPL 或預設使用 SYMBOLS 設定
+  let entries;
+  if (req.query.symbols) {
+    const customSymbols = req.query.symbols.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    entries = customSymbols.map(s => [s, { yahoo: s, name: s, unit: '' }]);
+  } else {
+    entries = Object.entries(SYMBOLS);
+  }
+
   try {
-    const entries = Object.entries(SYMBOLS);
     const results = await Promise.allSettled(
       entries.map(([, meta]) => fetchSymbol(meta.yahoo, period1Unix, period2Unix, `${meta.yahoo}_${cacheKeySuffix}`))
     );
