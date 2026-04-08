@@ -289,7 +289,7 @@ footer a{color:var(--blue);text-decoration:none}
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const USE_REAL_DATA = true;
 const API_BASE = '/api';
-const BASE_TICKER_COUNT = 6;
+const MAX_CHART_POINTS = 320;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  MOCK DATA
@@ -309,9 +309,9 @@ function genSeries(start, drift, vol, seed, n = 520) {
   return pts;
 }
 
-const N = 520;
+const MOCK_POINTS = 520;
 const BASE_DATE = new Date('2015-01-05');
-const ALL_LABELS = Array.from({ length: N }, (_, i) => {
+const ALL_LABELS = Array.from({ length: MOCK_POINTS }, (_, i) => {
   const d = new Date(BASE_DATE);
   d.setDate(d.getDate() + i * 7);
   return d.toISOString().slice(0, 10);
@@ -344,58 +344,50 @@ function toISODateLocal(date) {
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
-function parseISODate(s) {
-  return new Date(`${s}T00:00:00`);
+function shiftYears(dateStr, years) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setFullYear(d.getFullYear() - years);
+  return toISODateLocal(d);
 }
-function getMockStartDate(years) {
-  const end = parseISODate(ALL_LABELS[ALL_LABELS.length - 1]);
-  const start = new Date(end);
-  start.setFullYear(end.getFullYear() - years);
-  return toISODateLocal(start);
+function formatLastUpdate(updatedAt) {
+  return '更新：' + new Date(updatedAt).toLocaleString('zh-TW', {
+    timeZone:'Asia/Taipei',
+    month:'2-digit',
+    day:'2-digit',
+    hour:'2-digit',
+    minute:'2-digit'
+  });
 }
-function getRangeBounds() {
-  if (customFrom && customTo) return { from: customFrom, to: customTo };
-  return { from: getMockStartDate(rangeYears), to: ALL_LABELS[ALL_LABELS.length - 1] };
+function getMockBounds() {
+  const to = ALL_LABELS[ALL_LABELS.length - 1];
+  const from = customFrom && customTo ? customFrom : shiftYears(to, rangeYears);
+  return { from, to: customTo || to };
 }
 function getSeriesForTicker(t) {
-  return {
-    labels: Array.isArray(t.apiLabels) && t.apiLabels.length ? t.apiLabels : ALL_LABELS,
-    data: Array.isArray(t.raw) ? t.raw : [],
-  };
-}
-function filterSeries(labels, data) {
-  const { from, to } = getRangeBounds();
+  const hasApi = Array.isArray(t.apiLabels) && t.apiLabels.length && Array.isArray(t.raw) && t.raw.length;
+  if (hasApi) {
+    return {
+      labels: t.apiLabels.slice(0, t.raw.length),
+      data: t.raw.slice(0, t.apiLabels.length),
+    };
+  }
+  const bounds = getMockBounds();
   const outLabels = [];
   const outData = [];
-  for (let i = 0; i < Math.min(labels.length, data.length); i++) {
-    const d = labels[i];
-    const v = data[i];
-    if (!d || v == null) continue;
-    if (d >= from && d <= to) {
+  for (let i = 0; i < Math.min(ALL_LABELS.length, t.raw.length); i++) {
+    const d = ALL_LABELS[i];
+    const v = t.raw[i];
+    if (d >= bounds.from && d <= bounds.to && v != null) {
       outLabels.push(d);
       outData.push(v);
     }
   }
   return { labels: outLabels, data: outData };
 }
-function getFilteredTickerSeries(t) {
-  const { labels, data } = getSeriesForTicker(t);
-  return filterSeries(labels, data);
-}
-function normalize(arr) {
-  if (!arr || !arr.length) return [];
-  const b = arr[0];
-  if (!Number.isFinite(b) || b === 0) return arr.map(() => null);
-  return arr.map(v => (v == null ? null : +((v / b) * 100).toFixed(2)));
-}
 function calcStats(arr) {
-  if (!arr || !arr.length) {
-    return { ath:0, cur:0, dd:0, gain:0 };
-  }
+  if (!arr || !arr.length) return { ath:0, cur:0, dd:0, gain:0 };
   let ath = -Infinity;
-  for (const v of arr) {
-    if (v > ath) ath = v;
-  }
+  for (const v of arr) if (v > ath) ath = v;
   const cur = arr[arr.length - 1];
   return {
     ath:+ath.toFixed(2),
@@ -403,6 +395,12 @@ function calcStats(arr) {
     dd:+(((cur - ath) / ath) * 100).toFixed(2),
     gain:+(((cur - arr[0]) / arr[0]) * 100).toFixed(2),
   };
+}
+function normalize(arr) {
+  if (!arr || !arr.length) return [];
+  const base = arr.find(v => v != null && Number.isFinite(v));
+  if (!Number.isFinite(base) || base === 0) return arr.map(() => null);
+  return arr.map(v => (v == null ? null : +((v / base) * 100).toFixed(2)));
 }
 function fmt(v, unit) {
   if (!Number.isFinite(v)) return '—';
@@ -412,61 +410,87 @@ function fmt(v, unit) {
           :              v.toFixed(2);
   return `${unit} ${n}`;
 }
-function buildAlignedDatasets(seriesList) {
-  const allDates = [...new Set(seriesList.flatMap(s => s.labels))].sort();
+function getRows() {
+  return TICKERS.map((t, i) => {
+    const series = getSeriesForTicker(t);
+    return { t, i, labels: series.labels, data: series.data, stats: calcStats(series.data) };
+  }).filter(row => row.data.length);
+}
+function alignByDate(rows) {
+  const allDates = [...new Set(rows.flatMap(r => r.labels))].sort();
+  const datasets = rows.map(row => {
+    const map = new Map(row.labels.map((d, i) => [d, row.data[i]]));
+    return allDates.map(d => map.has(d) ? map.get(d) : null);
+  });
+  return { labels: allDates, datasets };
+}
+function decimateAligned(labels, datasets, maxPoints = MAX_CHART_POINTS) {
+  if (labels.length <= maxPoints) return { labels, datasets };
+  const keep = new Set([0, labels.length - 1]);
+  const step = (labels.length - 1) / (maxPoints - 1);
+  for (let i = 1; i < maxPoints - 1; i++) {
+    keep.add(Math.round(i * step));
+  }
+  const idxs = [...keep].sort((a, b) => a - b);
   return {
-    labels: allDates,
-    datasets: seriesList.map(s => {
-      const map = new Map(s.labels.map((d, i) => [d, s.data[i]]));
-      return allDates.map(d => map.has(d) ? map.get(d) : null);
-    }),
+    labels: idxs.map(i => labels[i]),
+    datasets: datasets.map(ds => idxs.map(i => ds[i])),
   };
 }
-function getFilteredStatsRows() {
-  return TICKERS.map((t, i) => {
-    const filtered = getFilteredTickerSeries(t);
-    return {
-      t,
-      i,
-      labels: filtered.labels,
-      data: filtered.data,
-      stats: calcStats(filtered.data),
-    };
-  }).filter(row => row.data.length);
+function buildChartData(rows) {
+  const aligned = alignByDate(rows.map(row => ({ labels: row.labels, data: normalize(row.data) })));
+  return decimateAligned(aligned.labels, aligned.datasets);
+}
+function setBadgeRealtime() {
+  const badge = document.getElementById('dataBadge');
+  badge.textContent = '🟢 即時數據';
+  badge.style.cssText = 'padding:4px 12px;background:rgba(34,211,160,.1);border:1px solid rgba(34,211,160,.3);border-radius:20px;font-size:11px;color:#22d3a0;letter-spacing:.3px';
+}
+function setBadgeMock() {
+  const badge = document.getElementById('dataBadge');
+  badge.textContent = '⚡ 模擬數據';
+  badge.style.cssText = '';
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  CHART
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderChart() {
-  const rows = getFilteredStatsRows();
-  const visibleRows = rows.filter(row => visible[row.i]);
+  const allRows = getRows();
+  const rows = allRows.filter(row => visible[row.i]);
 
-  if (!visibleRows.length) {
+  const legend = document.getElementById('legend');
+  legend.innerHTML = '';
+  allRows.forEach(row => {
+    const el = document.createElement('div');
+    el.className = 'legend-item' + (visible[row.i] ? '' : ' hidden');
+    el.innerHTML = `<span class="legend-dot" style="background:${row.t.color}"></span>
+      <span>${row.t.name}</span><span class="legend-val">${fmt(row.stats.cur, row.t.unit)}</span>`;
+    el.onclick = () => { visible[row.i] = !visible[row.i]; syncBtn(row.i); render(); };
+    legend.appendChild(el);
+  });
+
+  if (!rows.length) {
     document.getElementById('dateRange').textContent = '無可顯示資料';
-    document.getElementById('legend').innerHTML = '';
     if (chartInstance) chartInstance.destroy();
     chartInstance = null;
     return;
   }
 
-  const aligned = buildAlignedDatasets(visibleRows.map(row => ({
-    labels: row.labels,
-    data: normalize(row.data),
-  })));
+  const chartData = buildChartData(rows);
+  document.getElementById('dateRange').textContent =
+    chartData.labels.length ? `${chartData.labels[0]} → ${chartData.labels[chartData.labels.length - 1]}` : '無資料';
 
-  const labels = aligned.labels;
-  document.getElementById('dateRange').textContent = labels.length ? `${labels[0]} → ${labels[labels.length - 1]}` : '無資料';
-
-  const datasets = visibleRows.map((row, idx) => ({
+  const datasets = rows.map((row, idx) => ({
     label: row.t.name,
-    data: aligned.datasets[idx],
+    data: chartData.datasets[idx],
     borderColor: row.t.color,
     backgroundColor: 'transparent',
     borderWidth: 1.8,
     pointRadius: 0,
+    pointHitRadius: 12,
     spanGaps: true,
-    tension: 0.25,
+    tension: 0.2,
     hidden: false,
   }));
 
@@ -474,11 +498,12 @@ function renderChart() {
   const ctx = document.getElementById('mainChart').getContext('2d');
   chartInstance = new Chart(ctx, {
     type: 'line',
-    data: { labels, datasets },
+    data: { labels: chartData.labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      animation: { duration: 350 },
+      animation: { duration: 250 },
+      normalized: true,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: false },
@@ -503,7 +528,7 @@ function renderChart() {
             font: { size: 10 },
             maxTicksLimit: 8,
             autoSkip: true,
-            callback: (_, i) => labels[i]?.slice(0, 7) || ''
+            callback: (_, i) => chartData.labels[i]?.slice(0, 7) || ''
           },
           border: { color: '#2a3650' }
         },
@@ -520,30 +545,15 @@ function renderChart() {
       }
     }
   });
-
-  const lg = document.getElementById('legend');
-  lg.innerHTML = '';
-  rows.forEach(row => {
-    const el = document.createElement('div');
-    el.className = 'legend-item' + (visible[row.i] ? '' : ' hidden');
-    el.innerHTML = `<span class="legend-dot" style="background:${row.t.color}"></span>
-      <span>${row.t.name}</span><span class="legend-val">${fmt(row.stats.cur, row.t.unit)}</span>`;
-    el.onclick = () => {
-      visible[row.i] = !visible[row.i];
-      syncBtn(row.i);
-      render();
-    };
-    lg.appendChild(el);
-  });
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  STAT CARDS
+//  STAT CARDS / TABLE / INFO
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderStats() {
   const el = document.getElementById('statCards');
   el.innerHTML = '';
-  getFilteredStatsRows().forEach(({ t, i, stats }) => {
+  getRows().forEach(({ t, i, stats }) => {
     if (!visible[i]) return;
     const { cur, dd, gain } = stats;
     const ddClass = Math.abs(dd) > 20 ? 'bad' : Math.abs(dd) > 10 ? 'warn' : 'ok';
@@ -558,17 +568,12 @@ function renderStats() {
     el.appendChild(card);
   });
 }
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  TABLE
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderTable() {
   const tbody = document.getElementById('ddBody');
   tbody.innerHTML = '';
-
-  const rows = getFilteredStatsRows()
+  const rows = getRows()
     .filter(row => visible[row.i])
-    .map(row => ({ ...row.stats, t: row.t, i: row.i }))
+    .map(row => ({ ...row.stats, t: row.t }))
     .sort((a, b) => a.dd - b.dd);
 
   rows.forEach(({ t, ath, cur, dd, gain }) => {
@@ -591,17 +596,12 @@ function renderTable() {
     tbody.appendChild(tr);
   });
 }
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  INFO CARDS
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderInfo() {
   const el = document.getElementById('infoGrid');
   el.innerHTML = '';
-
-  const vis = getFilteredStatsRows()
+  const vis = getRows()
     .filter(row => visible[row.i])
-    .map(row => ({ ...row.stats, t: row.t, i: row.i }));
+    .map(row => ({ ...row.stats, t: row.t }));
 
   if (!vis.length) return;
 
@@ -629,63 +629,53 @@ function renderInfo() {
 function showLoading(v) {
   document.getElementById('loadingOverlay').classList.toggle('show', v);
 }
-function buildApiUrl(extra = '') {
-  if (customFrom && customTo) {
-    return `${API_BASE}/prices?from=${customFrom}&to=${customTo}${extra}`;
-  }
-  return `${API_BASE}/prices?range=${rangeYears}y${extra}`;
+function currentQueryForSymbol(symbol) {
+  if (customFrom && customTo) return `${API_BASE}/prices?symbols=${encodeURIComponent(symbol)}&from=${customFrom}&to=${customTo}`;
+  return `${API_BASE}/prices?symbols=${encodeURIComponent(symbol)}&range=${rangeYears}y`;
 }
-async function fetchTickerFromApi(symbol) {
-  const url = buildApiUrl(`&symbols=${encodeURIComponent(symbol)}`);
-  const res = await fetch(url);
+async function fetchSingleSymbol(symbol) {
+  const res = await fetch(currentQueryForSymbol(symbol));
   if (!res.ok) throw new Error(res.statusText || 'API error');
   const json = await res.json();
-  const ticker = json.tickers?.[0];
-  if (!ticker || ticker.error || !ticker.data?.length) {
-    throw new Error(`找不到 ${symbol} 的資料`);
-  }
-  return { ticker, updatedAt: json.updatedAt };
+  const item = json.tickers?.[0];
+  if (!item || item.error || !item.data?.length) throw new Error('找不到此標的，請確認代號是否正確');
+  return { item, json };
 }
 async function fetchRealData() {
   showLoading(true);
   try {
-    const baseRes = await fetch(buildApiUrl());
-    if (!baseRes.ok) throw new Error(baseRes.statusText || 'API error');
-    const baseJson = await baseRes.json();
+    const query = customFrom && customTo
+      ? `${API_BASE}/prices?from=${customFrom}&to=${customTo}`
+      : `${API_BASE}/prices?range=${rangeYears}y`;
+    const res = await fetch(query);
+    if (!res.ok) throw new Error(res.statusText || 'API error');
+    const json = await res.json();
 
-    baseJson.tickers.forEach((item, i) => {
+    json.tickers.forEach((item, i) => {
       if (!TICKERS[i]) return;
-      TICKERS[i].raw = item.data || [];
-      TICKERS[i].apiLabels = item.labels || [];
+      TICKERS[i].raw = Array.isArray(item.data) ? item.data : [];
+      TICKERS[i].apiLabels = Array.isArray(item.labels) ? item.labels : [];
       if (item.unit) TICKERS[i].unit = item.unit;
     });
 
-    const customTickers = TICKERS.slice(BASE_TICKER_COUNT);
-    for (const t of customTickers) {
+    for (let i = 6; i < TICKERS.length; i++) {
       try {
-        const { ticker } = await fetchTickerFromApi(t.ticker);
-        t.raw = ticker.data || [];
-        t.apiLabels = ticker.labels || [];
-        if (ticker.unit) t.unit = ticker.unit;
-      } catch (e) {
-        console.warn(`[custom] ${t.ticker} 更新失敗`, e);
+        const { item } = await fetchSingleSymbol(TICKERS[i].ticker);
+        TICKERS[i].raw = item.data || [];
+        TICKERS[i].apiLabels = item.labels || [];
+        if (item.unit) TICKERS[i].unit = item.unit;
+      } catch (err) {
+        console.warn(`[custom] ${TICKERS[i].ticker} refresh failed`, err);
       }
     }
 
-    const badge = document.getElementById('dataBadge');
-    badge.textContent = '🟢 即時數據';
-    badge.style.cssText = 'padding:4px 12px;background:rgba(34,211,160,.1);border:1px solid rgba(34,211,160,.3);border-radius:20px;font-size:11px;color:#22d3a0;letter-spacing:.3px';
-
-    const updatedAt = baseJson.updatedAt ? new Date(baseJson.updatedAt) : new Date();
-    document.getElementById('lastUpdate').textContent = '更新：' + updatedAt.toLocaleString('zh-TW', {
-      timeZone: 'Asia/Taipei',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    setBadgeRealtime();
+    if (json.updatedAt) {
+      document.getElementById('lastUpdate').textContent = formatLastUpdate(json.updatedAt);
+    }
   } catch (e) {
     console.warn('即時數據失敗，fallback 模擬數據', e);
+    setBadgeMock();
   }
   showLoading(false);
 }
@@ -714,11 +704,12 @@ window.toggleAll = btn => {
 window.setRange = async (btn, yrs) => {
   customFrom = null;
   customTo = null;
+  rangeYears = yrs;
   document.querySelectorAll('.rng-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  rangeYears = yrs;
-  document.getElementById('dateFrom').value = toISODateLocal(new Date(Date.now() - yrs * 365 * 24 * 3600 * 1000));
-  document.getElementById('dateTo').value = toISODateLocal(new Date());
+  const today = toISODateLocal(new Date());
+  document.getElementById('dateTo').value = today;
+  document.getElementById('dateFrom').value = shiftYears(today, yrs);
   if (USE_REAL_DATA) await fetchRealData();
   render();
 };
@@ -772,10 +763,7 @@ function selectColor(c, el) {
 async function verifySymbol() {
   const symbol = document.getElementById('modalSymbol').value.trim().toUpperCase();
   const name = document.getElementById('modalName').value.trim() || symbol;
-  if (!symbol) {
-    document.getElementById('modalError').textContent = '請輸入代號';
-    return;
-  }
+  if (!symbol) { document.getElementById('modalError').textContent = '請輸入代號'; return; }
   if (TICKERS.find(t => t.ticker.toUpperCase() === symbol)) {
     document.getElementById('modalError').textContent = '此標的已在列表中';
     return;
@@ -786,14 +774,14 @@ async function verifySymbol() {
   document.getElementById('modalLoading').textContent = '⏳ 驗證中，請稍候...';
 
   try {
-    const { ticker } = await fetchTickerFromApi(symbol);
+    const { item } = await fetchSingleSymbol(symbol);
     TICKERS.push({
       name,
       ticker: symbol,
       color: selectedColor,
-      unit: ticker.unit || '',
-      raw: ticker.data || [],
-      apiLabels: ticker.labels || [],
+      unit: item.unit || '',
+      raw: item.data || [],
+      apiLabels: item.labels || [],
       isCustom: true,
     });
     visible.push(true);
@@ -807,6 +795,7 @@ async function verifySymbol() {
   document.getElementById('modalLoading').textContent = '';
 }
 function removeTicker(idx) {
+  if (idx < 6) return;
   TICKERS.splice(idx, 1);
   visible.splice(idx, 1);
   rebuildTickerBtns();
@@ -817,11 +806,13 @@ function rebuildTickerBtns() {
   const allBtn = container.querySelector('.tick-btn.all');
   container.innerHTML = '';
   container.appendChild(allBtn);
+
   TICKERS.forEach((t, i) => {
     const btn = document.createElement('button');
     btn.className = 'tick-btn' + (visible[i] ? ' active' : '');
     btn.dataset.idx = i;
-    btn.innerHTML = `${t.name}<span class="remove-x" onclick="event.stopPropagation();removeTicker(${i})">✕</span>`;
+    const removeHtml = i >= 6 ? `<span class="remove-x" onclick="event.stopPropagation();removeTicker(${i})">✕</span>` : '';
+    btn.innerHTML = `${t.name}${removeHtml}`;
     btn.onclick = function() { toggleIdx(this); };
     container.appendChild(btn);
   });
@@ -838,17 +829,11 @@ function render() {
   renderInfo();
 }
 async function init() {
-  document.getElementById('lastUpdate').textContent = '更新：' + new Date().toLocaleString('zh-TW', {
-    timeZone: 'Asia/Taipei',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
   const today = toISODateLocal(new Date());
-  const fiveYearsAgo = toISODateLocal(new Date(Date.now() - 5 * 365 * 24 * 3600 * 1000));
+  const fiveYearsAgo = shiftYears(today, 5);
   document.getElementById('dateFrom').value = fiveYearsAgo;
   document.getElementById('dateTo').value = today;
+  document.getElementById('lastUpdate').textContent = formatLastUpdate(new Date().toISOString());
   if (USE_REAL_DATA) await fetchRealData();
   render();
 }
