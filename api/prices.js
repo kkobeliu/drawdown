@@ -15,7 +15,7 @@ async function fetchSymbol(symbol, period1Unix, period2Unix, cacheKey) {
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_MS) return cached.data;
 
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${period1Unix}&period2=${period2Unix}&interval=1wk&includePrePost=false`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${period1Unix}&period2=${period2Unix}&interval=1d&range=5y&includePrePost=false`;
 
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MarketMonitor/1.0)' }
