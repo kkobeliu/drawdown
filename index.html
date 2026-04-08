@@ -289,6 +289,7 @@ footer a{color:var(--blue);text-decoration:none}
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const USE_REAL_DATA = true;
 const API_BASE = '/api';
+const BASE_TICKER_COUNT = 6;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  MOCK DATA
@@ -297,123 +298,241 @@ function lcg(seed) {
   let s = seed >>> 0;
   return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 0xffffffff; };
 }
-function genSeries(start, drift, vol, seed, n=520) {
-  const r = lcg(seed); const pts = [start];
-  for (let i=1; i<n; i++) {
-    const prev = pts[i-1];
-    const crash = r()<0.003 ? -(r()*0.08+0.03) : 0;
-    pts.push(+(prev*(1 + drift/52 + (r()-0.5)*2*vol + crash)).toFixed(2));
+function genSeries(start, drift, vol, seed, n = 520) {
+  const r = lcg(seed);
+  const pts = [start];
+  for (let i = 1; i < n; i++) {
+    const prev = pts[i - 1];
+    const crash = r() < 0.003 ? -(r() * 0.08 + 0.03) : 0;
+    pts.push(+(prev * (1 + drift / 52 + (r() - 0.5) * 2 * vol + crash)).toFixed(2));
   }
   return pts;
 }
 
 const N = 520;
 const BASE_DATE = new Date('2015-01-05');
-const ALL_LABELS = Array.from({length:N}, (_,i)=>{
-  const d = new Date(BASE_DATE); d.setDate(d.getDate()+i*7);
-  return d.toISOString().slice(0,10);
+const ALL_LABELS = Array.from({ length: N }, (_, i) => {
+  const d = new Date(BASE_DATE);
+  d.setDate(d.getDate() + i * 7);
+  return d.toISOString().slice(0, 10);
 });
 
 const TICKERS = [
-  {name:'VOO',       ticker:'VOO',  color:'#4a9eff', unit:'USD', raw:genSeries(190,  0.120, 0.022, 42),  apiLabels:null},
-  {name:'那斯達克',  ticker:'QQQ',  color:'#a78bfa', unit:'pt',  raw:genSeries(4500, 0.155, 0.030, 137), apiLabels:null},
-  {name:'費半 SOX',  ticker:'SOXX', color:'#22d3ee', unit:'pt',  raw:genSeries(800,  0.140, 0.042, 77),  apiLabels:null},
-  {name:'WTI 油價',  ticker:'USO',  color:'#f5a623', unit:'USD', raw:genSeries(65,  -0.015, 0.040, 211), apiLabels:null},
-  {name:'黃金',      ticker:'GC',   color:'#f5d442', unit:'USD', raw:genSeries(1200, 0.055, 0.017, 333), apiLabels:null},
-  {name:'006208',    ticker:'TW',   color:'#22d3a0', unit:'TWD', raw:genSeries(42,   0.105, 0.022, 99),  apiLabels:null},
+  { name:'VOO',      ticker:'VOO',  color:'#4a9eff', unit:'USD', raw:genSeries(190,  0.120, 0.022, 42),  apiLabels:null, isCustom:false },
+  { name:'那斯達克', ticker:'QQQ',  color:'#a78bfa', unit:'USD', raw:genSeries(4500, 0.155, 0.030, 137), apiLabels:null, isCustom:false },
+  { name:'費半 SOX', ticker:'SOXX', color:'#22d3ee', unit:'USD', raw:genSeries(800,  0.140, 0.042, 77),  apiLabels:null, isCustom:false },
+  { name:'WTI 油價', ticker:'WTI',  color:'#f5a623', unit:'USD', raw:genSeries(65,  -0.015, 0.040, 211), apiLabels:null, isCustom:false },
+  { name:'黃金',     ticker:'GC',   color:'#f5d442', unit:'USD', raw:genSeries(1200, 0.055, 0.017, 333), apiLabels:null, isCustom:false },
+  { name:'006208',   ticker:'TW',   color:'#22d3a0', unit:'TWD', raw:genSeries(42,   0.105, 0.022, 99),  apiLabels:null, isCustom:false },
 ];
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  STATE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-let visible = TICKERS.map(()=>true);
+let visible = TICKERS.map(() => true);
 let rangeYears = 5;
 let chartInstance = null;
+let customFrom = null;
+let customTo = null;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  UTILS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const si = () => Math.max(0, N - rangeYears*52);
-const slice = (arr) => arr.slice(si());
-
+function toISODateLocal(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+function parseISODate(s) {
+  return new Date(`${s}T00:00:00`);
+}
+function getMockStartDate(years) {
+  const end = parseISODate(ALL_LABELS[ALL_LABELS.length - 1]);
+  const start = new Date(end);
+  start.setFullYear(end.getFullYear() - years);
+  return toISODateLocal(start);
+}
+function getRangeBounds() {
+  if (customFrom && customTo) return { from: customFrom, to: customTo };
+  return { from: getMockStartDate(rangeYears), to: ALL_LABELS[ALL_LABELS.length - 1] };
+}
+function getSeriesForTicker(t) {
+  return {
+    labels: Array.isArray(t.apiLabels) && t.apiLabels.length ? t.apiLabels : ALL_LABELS,
+    data: Array.isArray(t.raw) ? t.raw : [],
+  };
+}
+function filterSeries(labels, data) {
+  const { from, to } = getRangeBounds();
+  const outLabels = [];
+  const outData = [];
+  for (let i = 0; i < Math.min(labels.length, data.length); i++) {
+    const d = labels[i];
+    const v = data[i];
+    if (!d || v == null) continue;
+    if (d >= from && d <= to) {
+      outLabels.push(d);
+      outData.push(v);
+    }
+  }
+  return { labels: outLabels, data: outData };
+}
+function getFilteredTickerSeries(t) {
+  const { labels, data } = getSeriesForTicker(t);
+  return filterSeries(labels, data);
+}
 function normalize(arr) {
+  if (!arr || !arr.length) return [];
   const b = arr[0];
-  return arr.map(v => +(v/b*100).toFixed(2));
+  if (!Number.isFinite(b) || b === 0) return arr.map(() => null);
+  return arr.map(v => (v == null ? null : +((v / b) * 100).toFixed(2)));
 }
 function calcStats(arr) {
-  let ath=-Infinity, athI=0;
-  arr.forEach((v,i)=>{ if(v>ath){ath=v;athI=i;} });
-  const cur=arr[arr.length-1];
+  if (!arr || !arr.length) {
+    return { ath:0, cur:0, dd:0, gain:0 };
+  }
+  let ath = -Infinity;
+  for (const v of arr) {
+    if (v > ath) ath = v;
+  }
+  const cur = arr[arr.length - 1];
   return {
-    ath:+ath.toFixed(2), cur:+cur.toFixed(2),
-    dd:+((cur-ath)/ath*100).toFixed(2),
-    gain:+((cur-arr[0])/arr[0]*100).toFixed(2)
+    ath:+ath.toFixed(2),
+    cur:+cur.toFixed(2),
+    dd:+(((cur - ath) / ath) * 100).toFixed(2),
+    gain:+(((cur - arr[0]) / arr[0]) * 100).toFixed(2),
   };
 }
 function fmt(v, unit) {
-  if(!unit) return v.toLocaleString('en',{maximumFractionDigits:2});
-  const n = v>=10000 ? v.toLocaleString('en',{maximumFractionDigits:0})
-          : v>=100   ? v.toLocaleString('en',{maximumFractionDigits:1})
-          :             v.toFixed(2);
+  if (!Number.isFinite(v)) return '—';
+  if (!unit) return v.toLocaleString('en', { maximumFractionDigits: 2 });
+  const n = v >= 10000 ? v.toLocaleString('en', { maximumFractionDigits: 0 })
+          : v >= 100   ? v.toLocaleString('en', { maximumFractionDigits: 1 })
+          :              v.toFixed(2);
   return `${unit} ${n}`;
+}
+function buildAlignedDatasets(seriesList) {
+  const allDates = [...new Set(seriesList.flatMap(s => s.labels))].sort();
+  return {
+    labels: allDates,
+    datasets: seriesList.map(s => {
+      const map = new Map(s.labels.map((d, i) => [d, s.data[i]]));
+      return allDates.map(d => map.has(d) ? map.get(d) : null);
+    }),
+  };
+}
+function getFilteredStatsRows() {
+  return TICKERS.map((t, i) => {
+    const filtered = getFilteredTickerSeries(t);
+    return {
+      t,
+      i,
+      labels: filtered.labels,
+      data: filtered.data,
+      stats: calcStats(filtered.data),
+    };
+  }).filter(row => row.data.length);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  CHART
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderChart() {
-  const s = si();
-  // 有即時數據時用 API 回傳的日期，否則用模擬日期
-  const firstWithLabels = TICKERS.find(t => t.apiLabels && t.apiLabels.length > 0);
-  const labels = firstWithLabels ? firstWithLabels.apiLabels : ALL_LABELS.slice(s);
-  document.getElementById('dateRange').textContent = labels[0]+' → '+labels[labels.length-1];
+  const rows = getFilteredStatsRows();
+  const visibleRows = rows.filter(row => visible[row.i]);
 
-  const datasets = TICKERS.map((t,i)=>({
-    label:t.name, data: normalize(t.apiLabels ? t.raw : slice(t.raw)),
-    borderColor:t.color, backgroundColor:'transparent',
-    borderWidth:1.8, pointRadius:0, tension:0.3, hidden:!visible[i],
+  if (!visibleRows.length) {
+    document.getElementById('dateRange').textContent = '無可顯示資料';
+    document.getElementById('legend').innerHTML = '';
+    if (chartInstance) chartInstance.destroy();
+    chartInstance = null;
+    return;
+  }
+
+  const aligned = buildAlignedDatasets(visibleRows.map(row => ({
+    labels: row.labels,
+    data: normalize(row.data),
+  })));
+
+  const labels = aligned.labels;
+  document.getElementById('dateRange').textContent = labels.length ? `${labels[0]} → ${labels[labels.length - 1]}` : '無資料';
+
+  const datasets = visibleRows.map((row, idx) => ({
+    label: row.t.name,
+    data: aligned.datasets[idx],
+    borderColor: row.t.color,
+    backgroundColor: 'transparent',
+    borderWidth: 1.8,
+    pointRadius: 0,
+    spanGaps: true,
+    tension: 0.25,
+    hidden: false,
   }));
 
-  if(chartInstance) chartInstance.destroy();
+  if (chartInstance) chartInstance.destroy();
   const ctx = document.getElementById('mainChart').getContext('2d');
   chartInstance = new Chart(ctx, {
-    type:'line', data:{labels, datasets},
-    options:{
-      responsive:true, maintainAspectRatio:false, animation:{duration:350},
-      interaction:{mode:'index',intersect:false},
-      plugins:{
-        legend:{display:false},
-        tooltip:{
-          backgroundColor:'#1a2235', borderColor:'#2a3650', borderWidth:1,
-          titleColor:'#8899bb', bodyColor:'#e2e8f8',
-          titleFont:{size:11,family:'Space Grotesk'},
-          bodyFont:{family:'JetBrains Mono',size:11},
-          filter: item => visible[item.datasetIndex],
-          callbacks:{label:c=>` ${c.dataset.label}: ${c.parsed.y.toFixed(1)}`}
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 350 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a2235',
+          borderColor: '#2a3650',
+          borderWidth: 1,
+          titleColor: '#8899bb',
+          bodyColor: '#e2e8f8',
+          titleFont: { size: 11, family: 'Space Grotesk' },
+          bodyFont: { family: 'JetBrains Mono', size: 11 },
+          callbacks: {
+            label: c => c.parsed.y == null ? ` ${c.dataset.label}: —` : ` ${c.dataset.label}: ${c.parsed.y.toFixed(1)}`
+          }
         }
       },
-      scales:{
-        x:{grid:{color:'rgba(42,54,80,.3)',drawTicks:false},
-          ticks:{color:'#4a5a7a',font:{size:10},maxTicksLimit:8,autoSkip:true,
-            callback:(_,i)=>labels[i]?.slice(0,7)},
-          border:{color:'#2a3650'}},
-        y:{grid:{color:'rgba(42,54,80,.3)',drawTicks:false},
-          ticks:{color:'#4a5a7a',font:{family:'JetBrains Mono',size:10},callback:v=>v.toFixed(0)},
-          border:{color:'#2a3650'},
-          title:{display:true,text:'基期 = 100',color:'#4a5a7a',font:{size:10}}}
+      scales: {
+        x: {
+          grid: { color: 'rgba(42,54,80,.3)', drawTicks: false },
+          ticks: {
+            color: '#4a5a7a',
+            font: { size: 10 },
+            maxTicksLimit: 8,
+            autoSkip: true,
+            callback: (_, i) => labels[i]?.slice(0, 7) || ''
+          },
+          border: { color: '#2a3650' }
+        },
+        y: {
+          grid: { color: 'rgba(42,54,80,.3)', drawTicks: false },
+          ticks: {
+            color: '#4a5a7a',
+            font: { family: 'JetBrains Mono', size: 10 },
+            callback: v => Number(v).toFixed(0)
+          },
+          border: { color: '#2a3650' },
+          title: { display: true, text: '基期 = 100', color: '#4a5a7a', font: { size: 10 } }
+        }
       }
     }
   });
 
-  // Legend
-  const lg = document.getElementById('legend'); lg.innerHTML='';
-  TICKERS.forEach((t,i)=>{
-    const {cur} = calcStats(slice(t.raw));
+  const lg = document.getElementById('legend');
+  lg.innerHTML = '';
+  rows.forEach(row => {
     const el = document.createElement('div');
-    el.className = 'legend-item'+(visible[i]?'':' hidden');
-    el.innerHTML=`<span class="legend-dot" style="background:${t.color}"></span>
-      <span>${t.name}</span><span class="legend-val">${fmt(cur,t.unit)}</span>`;
-    el.onclick=()=>{ visible[i]=!visible[i]; syncBtn(i); render(); };
+    el.className = 'legend-item' + (visible[row.i] ? '' : ' hidden');
+    el.innerHTML = `<span class="legend-dot" style="background:${row.t.color}"></span>
+      <span>${row.t.name}</span><span class="legend-val">${fmt(row.stats.cur, row.t.unit)}</span>`;
+    el.onclick = () => {
+      visible[row.i] = !visible[row.i];
+      syncBtn(row.i);
+      render();
+    };
     lg.appendChild(el);
   });
 }
@@ -422,19 +541,20 @@ function renderChart() {
 //  STAT CARDS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderStats() {
-  const el = document.getElementById('statCards'); el.innerHTML='';
-  TICKERS.forEach((t,i)=>{
-    if(!visible[i]) return;
-    const {ath,cur,dd,gain} = calcStats(t.apiLabels ? t.raw : slice(t.raw));
-    const ddClass = Math.abs(dd)>20?'bad':Math.abs(dd)>10?'warn':'ok';
+  const el = document.getElementById('statCards');
+  el.innerHTML = '';
+  getFilteredStatsRows().forEach(({ t, i, stats }) => {
+    if (!visible[i]) return;
+    const { cur, dd, gain } = stats;
+    const ddClass = Math.abs(dd) > 20 ? 'bad' : Math.abs(dd) > 10 ? 'warn' : 'ok';
     const card = document.createElement('div');
-    card.className='stat-card';
-    card.innerHTML=`
+    card.className = 'stat-card';
+    card.innerHTML = `
       <div class="stat-name"><span class="stat-dot" style="background:${t.color}"></span>${t.name}</div>
-      <div class="stat-price">${fmt(cur,t.unit)}</div>
+      <div class="stat-price">${fmt(cur, t.unit)}</div>
       <div class="stat-dd ${ddClass}">${dd.toFixed(2)}%</div>
       <div class="stat-meta">從高點回撤</div>
-      <div class="stat-gain ${gain>=0?'pos':'neg'}">${gain>=0?'▲':'▼'} ${Math.abs(gain).toFixed(2)}% 區間</div>`;
+      <div class="stat-gain ${gain >= 0 ? 'pos' : 'neg'}">${gain >= 0 ? '▲' : '▼'} ${Math.abs(gain).toFixed(2)}% 區間</div>`;
     el.appendChild(card);
   });
 }
@@ -443,27 +563,30 @@ function renderStats() {
 //  TABLE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderTable() {
-  const tbody = document.getElementById('ddBody'); tbody.innerHTML='';
-  const rows = TICKERS
-    .map((t,i)=>({...calcStats(t.apiLabels ? t.raw : slice(t.raw)),t,i}))
-    .filter((_,i)=>visible[i])
-    .sort((a,b)=>a.dd-b.dd);
-  rows.forEach(({t,ath,cur,dd,gain})=>{
-    const abs=Math.abs(dd);
-    const barW=Math.min(100,abs*2.8);
-    const barColor=abs>20?'#f85a5a':abs>10?'#f5a623':'#22d3a0';
-    const badge=abs>20?'<span class="badge high">高回撤</span>'
-              :abs>10?'<span class="badge mid">中回撤</span>'
-              :'<span class="badge low">健康</span>';
-    const tr=document.createElement('tr');
-    tr.innerHTML=`
+  const tbody = document.getElementById('ddBody');
+  tbody.innerHTML = '';
+
+  const rows = getFilteredStatsRows()
+    .filter(row => visible[row.i])
+    .map(row => ({ ...row.stats, t: row.t, i: row.i }))
+    .sort((a, b) => a.dd - b.dd);
+
+  rows.forEach(({ t, ath, cur, dd, gain }) => {
+    const abs = Math.abs(dd);
+    const barW = Math.min(100, abs * 2.8);
+    const barColor = abs > 20 ? '#f85a5a' : abs > 10 ? '#f5a623' : '#22d3a0';
+    const badge = abs > 20 ? '<span class="badge high">高回撤</span>'
+                : abs > 10 ? '<span class="badge mid">中回撤</span>'
+                : '<span class="badge low">健康</span>';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
       <td><div class="idx-name"><span class="idx-dot" style="background:${t.color}"></span>
         <span class="idx-label">${t.name}</span></div></td>
-      <td class="mono">${fmt(cur,t.unit)}</td>
-      <td class="mono">${fmt(ath,t.unit)}</td>
+      <td class="mono">${fmt(cur, t.unit)}</td>
+      <td class="mono">${fmt(ath, t.unit)}</td>
       <td class="red">${dd.toFixed(2)}%</td>
       <td><div class="dd-bar-bg"><div class="dd-bar-fill" style="width:${barW}%;background:${barColor}"></div></div></td>
-      <td class="${gain>=0?'green':'red'}">${gain>=0?'+':''}${gain.toFixed(2)}%</td>
+      <td class="${gain >= 0 ? 'green' : 'red'}">${gain >= 0 ? '+' : ''}${gain.toFixed(2)}%</td>
       <td>${badge}</td>`;
     tbody.appendChild(tr);
   });
@@ -473,53 +596,97 @@ function renderTable() {
 //  INFO CARDS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderInfo() {
-  const el=document.getElementById('infoGrid'); el.innerHTML='';
-  const vis=TICKERS.map((t,i)=>({...calcStats(t.apiLabels ? t.raw : slice(t.raw)),t,i})).filter((_,i)=>visible[i]);
-  if(!vis.length) return;
+  const el = document.getElementById('infoGrid');
+  el.innerHTML = '';
 
-  const c1=document.createElement('div'); c1.className='info-card';
-  c1.innerHTML='<h3>📈 區間報酬排名</h3>'+
-    [...vis].sort((a,b)=>b.gain-a.gain).map(({t,gain})=>
+  const vis = getFilteredStatsRows()
+    .filter(row => visible[row.i])
+    .map(row => ({ ...row.stats, t: row.t, i: row.i }));
+
+  if (!vis.length) return;
+
+  const c1 = document.createElement('div');
+  c1.className = 'info-card';
+  c1.innerHTML = '<h3>📈 區間報酬排名</h3>' +
+    [...vis].sort((a, b) => b.gain - a.gain).map(({ t, gain }) =>
       `<div class="info-row"><span class="info-key" style="color:${t.color}">${t.name}</span>
-       <span class="info-val ${gain>=0?'up':'dn'}">${gain>=0?'+':''}${gain.toFixed(2)}%</span></div>`).join('');
+       <span class="info-val ${gain >= 0 ? 'up' : 'dn'}">${gain >= 0 ? '+' : ''}${gain.toFixed(2)}%</span></div>`).join('');
 
-  const c2=document.createElement('div'); c2.className='info-card';
-  c2.innerHTML='<h3>📉 回撤排名（最差→最好）</h3>'+
-    [...vis].sort((a,b)=>a.dd-b.dd).map(({t,dd})=>
+  const c2 = document.createElement('div');
+  c2.className = 'info-card';
+  c2.innerHTML = '<h3>📉 回撤排名（最差→最好）</h3>' +
+    [...vis].sort((a, b) => a.dd - b.dd).map(({ t, dd }) =>
       `<div class="info-row"><span class="info-key" style="color:${t.color}">${t.name}</span>
        <span class="info-val dn">${dd.toFixed(2)}%</span></div>`).join('');
 
-  el.appendChild(c1); el.appendChild(c2);
+  el.appendChild(c1);
+  el.appendChild(c2);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  REAL DATA (部署後啟用)
+//  REAL DATA
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// customFrom / customTo: 'YYYY-MM-DD' string or null
-let customFrom = null, customTo = null;
-
 function showLoading(v) {
   document.getElementById('loadingOverlay').classList.toggle('show', v);
 }
-
+function buildApiUrl(extra = '') {
+  if (customFrom && customTo) {
+    return `${API_BASE}/prices?from=${customFrom}&to=${customTo}${extra}`;
+  }
+  return `${API_BASE}/prices?range=${rangeYears}y${extra}`;
+}
+async function fetchTickerFromApi(symbol) {
+  const url = buildApiUrl(`&symbols=${encodeURIComponent(symbol)}`);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(res.statusText || 'API error');
+  const json = await res.json();
+  const ticker = json.tickers?.[0];
+  if (!ticker || ticker.error || !ticker.data?.length) {
+    throw new Error(`找不到 ${symbol} 的資料`);
+  }
+  return { ticker, updatedAt: json.updatedAt };
+}
 async function fetchRealData() {
   showLoading(true);
   try {
-    let url;
-    if (customFrom && customTo) {
-      url = `${API_BASE}/prices?from=${customFrom}&to=${customTo}`;
-    } else {
-      url = `${API_BASE}/prices?range=${rangeYears}y`;
+    const baseRes = await fetch(buildApiUrl());
+    if (!baseRes.ok) throw new Error(baseRes.statusText || 'API error');
+    const baseJson = await baseRes.json();
+
+    baseJson.tickers.forEach((item, i) => {
+      if (!TICKERS[i]) return;
+      TICKERS[i].raw = item.data || [];
+      TICKERS[i].apiLabels = item.labels || [];
+      if (item.unit) TICKERS[i].unit = item.unit;
+    });
+
+    const customTickers = TICKERS.slice(BASE_TICKER_COUNT);
+    for (const t of customTickers) {
+      try {
+        const { ticker } = await fetchTickerFromApi(t.ticker);
+        t.raw = ticker.data || [];
+        t.apiLabels = ticker.labels || [];
+        if (ticker.unit) t.unit = ticker.unit;
+      } catch (e) {
+        console.warn(`[custom] ${t.ticker} 更新失敗`, e);
+      }
     }
-    const res = await fetch(url);
-    if(!res.ok) throw new Error(res.statusText);
-    const json = await res.json();
-    json.tickers.forEach((item,i)=>{ if(TICKERS[i]) { TICKERS[i].raw = item.data; TICKERS[i].apiLabels = item.labels || null; } });
+
     const badge = document.getElementById('dataBadge');
-    badge.textContent='🟢 即時數據';
-    badge.style.cssText='padding:4px 12px;background:rgba(34,211,160,.1);border:1px solid rgba(34,211,160,.3);border-radius:20px;font-size:11px;color:#22d3a0;letter-spacing:.3px';
-    if(json.updatedAt) document.getElementById('lastUpdate').textContent='更新：'+new Date(json.updatedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
-  } catch(e) { console.warn('即時數據失敗，fallback 模擬數據',e); }
+    badge.textContent = '🟢 即時數據';
+    badge.style.cssText = 'padding:4px 12px;background:rgba(34,211,160,.1);border:1px solid rgba(34,211,160,.3);border-radius:20px;font-size:11px;color:#22d3a0;letter-spacing:.3px';
+
+    const updatedAt = baseJson.updatedAt ? new Date(baseJson.updatedAt) : new Date();
+    document.getElementById('lastUpdate').textContent = '更新：' + updatedAt.toLocaleString('zh-TW', {
+      timeZone: 'Asia/Taipei',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch (e) {
+    console.warn('即時數據失敗，fallback 模擬數據', e);
+  }
   showLoading(false);
 }
 
@@ -527,40 +694,43 @@ async function fetchRealData() {
 //  CONTROLS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function syncBtn(i) {
-  document.querySelectorAll('.tick-btn[data-idx]')[i]?.classList.toggle('active',visible[i]);
-  document.querySelector('.tick-btn.all').classList.toggle('active',visible.every(v=>v));
+  document.querySelectorAll('.tick-btn[data-idx]')[i]?.classList.toggle('active', visible[i]);
+  document.querySelector('.tick-btn.all')?.classList.toggle('active', visible.every(v => v));
 }
-
 window.toggleIdx = btn => {
-  const i=+btn.dataset.idx; visible[i]=!visible[i];
-  btn.classList.toggle('active',visible[i]);
-  document.querySelector('.tick-btn.all').classList.toggle('active',visible.every(v=>v));
+  const i = +btn.dataset.idx;
+  visible[i] = !visible[i];
+  btn.classList.toggle('active', visible[i]);
+  document.querySelector('.tick-btn.all')?.classList.toggle('active', visible.every(v => v));
   render();
 };
 window.toggleAll = btn => {
-  const allOn=visible.every(v=>v);
-  visible=visible.map(()=>!allOn);
-  document.querySelectorAll('.tick-btn[data-idx]').forEach((b,i)=>b.classList.toggle('active',visible[i]));
-  btn.classList.toggle('active',!allOn);
+  const allOn = visible.every(v => v);
+  visible = visible.map(() => !allOn);
+  document.querySelectorAll('.tick-btn[data-idx]').forEach((b, i) => b.classList.toggle('active', visible[i]));
+  btn.classList.toggle('active', !allOn);
   render();
 };
-window.setRange = async (btn,yrs) => {
-  customFrom = null; customTo = null;
-  document.querySelectorAll('.rng-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active'); rangeYears=yrs;
-  if(USE_REAL_DATA) await fetchRealData();
+window.setRange = async (btn, yrs) => {
+  customFrom = null;
+  customTo = null;
+  document.querySelectorAll('.rng-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  rangeYears = yrs;
+  document.getElementById('dateFrom').value = toISODateLocal(new Date(Date.now() - yrs * 365 * 24 * 3600 * 1000));
+  document.getElementById('dateTo').value = toISODateLocal(new Date());
+  if (USE_REAL_DATA) await fetchRealData();
   render();
 };
-
 window.applyCustomRange = async () => {
   const from = document.getElementById('dateFrom').value;
-  const to   = document.getElementById('dateTo').value;
+  const to = document.getElementById('dateTo').value;
   if (!from || !to) { alert('請選擇開始和結束日期'); return; }
-  if (from >= to)   { alert('開始日期必須早於結束日期'); return; }
-  // deactivate preset buttons
-  document.querySelectorAll('.rng-btn').forEach(b=>b.classList.remove('active'));
-  customFrom = from; customTo = to;
-  if(USE_REAL_DATA) await fetchRealData();
+  if (from >= to) { alert('開始日期必須早於結束日期'); return; }
+  document.querySelectorAll('.rng-btn').forEach(b => b.classList.remove('active'));
+  customFrom = from;
+  customTo = to;
+  if (USE_REAL_DATA) await fetchRealData();
   render();
 };
 
@@ -571,7 +741,7 @@ const PALETTE = [
   '#4a9eff','#a78bfa','#22d3ee','#f5a623','#f5d442','#22d3a0',
   '#f87171','#34d399','#fb923c','#e879f9','#60a5fa','#facc15',
 ];
-let selectedColor = PALETTE[6]; // default for new tickers
+let selectedColor = PALETTE[6];
 
 function openModal() {
   document.getElementById('modalSymbol').value = '';
@@ -579,36 +749,34 @@ function openModal() {
   document.getElementById('modalError').textContent = '';
   document.getElementById('modalLoading').textContent = '';
   document.getElementById('modalConfirm').disabled = false;
-  // pick a color not already used
-  const used = TICKERS.map(t=>t.color);
-  selectedColor = PALETTE.find(c=>!used.includes(c)) || PALETTE[Math.floor(Math.random()*PALETTE.length)];
-  // build swatches
+  const used = TICKERS.map(t => t.color);
+  selectedColor = PALETTE.find(c => !used.includes(c)) || PALETTE[Math.floor(Math.random() * PALETTE.length)];
   const row = document.getElementById('swatchRow');
-  row.innerHTML = PALETTE.map(c=>`
-    <div class="swatch${c===selectedColor?' selected':''}" style="background:${c}"
+  row.innerHTML = PALETTE.map(c => `
+    <div class="swatch${c === selectedColor ? ' selected' : ''}" style="background:${c}"
       onclick="selectColor('${c}',this)"></div>`).join('');
   document.getElementById('modalBg').classList.add('open');
-  setTimeout(()=>document.getElementById('modalSymbol').focus(), 50);
+  setTimeout(() => document.getElementById('modalSymbol').focus(), 50);
 }
 function closeModal() {
   document.getElementById('modalBg').classList.remove('open');
 }
 function handleModalBgClick(e) {
-  if(e.target === document.getElementById('modalBg')) closeModal();
+  if (e.target === document.getElementById('modalBg')) closeModal();
 }
 function selectColor(c, el) {
   selectedColor = c;
-  document.querySelectorAll('.swatch').forEach(s=>s.classList.remove('selected'));
+  document.querySelectorAll('.swatch').forEach(s => s.classList.remove('selected'));
   el.classList.add('selected');
 }
-
 async function verifySymbol() {
-  const symbol = document.getElementById('modalSymbol').value.trim();
-  const name   = document.getElementById('modalName').value.trim() || symbol;
-  if (!symbol) { document.getElementById('modalError').textContent = '請輸入代號'; return; }
-
-  // check duplicate
-  if (TICKERS.find(t=>t.ticker.toUpperCase()===symbol.toUpperCase())) {
+  const symbol = document.getElementById('modalSymbol').value.trim().toUpperCase();
+  const name = document.getElementById('modalName').value.trim() || symbol;
+  if (!symbol) {
+    document.getElementById('modalError').textContent = '請輸入代號';
+    return;
+  }
+  if (TICKERS.find(t => t.ticker.toUpperCase() === symbol)) {
     document.getElementById('modalError').textContent = '此標的已在列表中';
     return;
   }
@@ -618,51 +786,34 @@ async function verifySymbol() {
   document.getElementById('modalLoading').textContent = '⏳ 驗證中，請稍候...';
 
   try {
-    // verify by calling backend
-    let url;
-    if (customFrom && customTo) {
-      url = `${API_BASE}/prices?symbols=${encodeURIComponent(symbol)}&from=${customFrom}&to=${customTo}`;
-    } else {
-      url = `${API_BASE}/prices?symbols=${encodeURIComponent(symbol)}&range=${rangeYears}y`;
-    }
-    const res = await fetch(url);
-    const json = await res.json();
-    const ticker = json.tickers?.[0];
-
-    if (!ticker || ticker.error || !ticker.data?.length) {
-      throw new Error('找不到此標的，請確認代號是否正確');
-    }
-
-    // add to TICKERS
+    const { ticker } = await fetchTickerFromApi(symbol);
     TICKERS.push({
-      name, ticker: symbol, color: selectedColor,
+      name,
+      ticker: symbol,
+      color: selectedColor,
       unit: ticker.unit || '',
-      raw: ticker.data,
-      apiLabels: ticker.labels || null,
+      raw: ticker.data || [],
+      apiLabels: ticker.labels || [],
+      isCustom: true,
     });
     visible.push(true);
-
-    // rebuild ticker buttons
     rebuildTickerBtns();
     closeModal();
     render();
-  } catch(e) {
+  } catch (e) {
     document.getElementById('modalError').textContent = e.message || '驗證失敗';
     document.getElementById('modalConfirm').disabled = false;
   }
   document.getElementById('modalLoading').textContent = '';
 }
-
 function removeTicker(idx) {
   TICKERS.splice(idx, 1);
   visible.splice(idx, 1);
   rebuildTickerBtns();
   render();
 }
-
 function rebuildTickerBtns() {
   const container = document.getElementById('tickerBtns');
-  // keep the "全部" button, rebuild the rest
   const allBtn = container.querySelector('.tick-btn.all');
   container.innerHTML = '';
   container.appendChild(allBtn);
@@ -674,27 +825,33 @@ function rebuildTickerBtns() {
     btn.onclick = function() { toggleIdx(this); };
     container.appendChild(btn);
   });
-  // update "全部" state
-  allBtn.classList.toggle('active', visible.every(v=>v));
+  allBtn.classList.toggle('active', visible.every(v => v));
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  INIT
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function render() { renderChart(); renderStats(); renderTable(); renderInfo(); }
-
+function render() {
+  renderChart();
+  renderStats();
+  renderTable();
+  renderInfo();
+}
 async function init() {
-  document.getElementById('lastUpdate').textContent =
-    '更新：'+new Date().toLocaleString('zh-TW',{timeZone:'Asia/Taipei',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
-  // Set default date input values
-  const today = new Date().toISOString().slice(0,10);
-  const fiveYearsAgo = new Date(Date.now() - 5*365*24*3600*1000).toISOString().slice(0,10);
+  document.getElementById('lastUpdate').textContent = '更新：' + new Date().toLocaleString('zh-TW', {
+    timeZone: 'Asia/Taipei',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  const today = toISODateLocal(new Date());
+  const fiveYearsAgo = toISODateLocal(new Date(Date.now() - 5 * 365 * 24 * 3600 * 1000));
   document.getElementById('dateFrom').value = fiveYearsAgo;
   document.getElementById('dateTo').value = today;
-  if(USE_REAL_DATA) await fetchRealData();
+  if (USE_REAL_DATA) await fetchRealData();
   render();
 }
-
 init();
 </script>
 </body>
